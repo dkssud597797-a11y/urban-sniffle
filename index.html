@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-select=none, touch-action=none">
+    <title>매일매일 와이어 런</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #f5f7fa;
+            font-family: -apple-system, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            max-width: 450px;
+            max-height: 850px;
+            background: #ffffff;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+        }
+        .hud {
+            padding: 15px 20px;
+            background: #fff;
+            border-bottom: 1px solid #f2f4f6;
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+        #scoreDisplay { color: #191f28; }
+        #bestDisplay { color: #ff4757; }
+        canvas {
+            flex: 1;
+            background: linear-gradient(to bottom, #eef2f7, #ffffff);
+            display: block;
+        }
+        .screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(25, 31, 40, 0.94);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 10;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s;
+            padding: 30px;
+            text-align: center;
+        }
+        .screen.active { opacity: 1; visibility: visible; }
+        .screen h1 { font-size: 2rem; margin-bottom: 15px; color: #3182f6; }
+        .screen p { font-size: 1rem; color: #b0b8c1; line-height: 1.6; margin-bottom: 30px; }
+        .btn {
+            padding: 15px 40px;
+            background: #3182f6;
+            border: none;
+            color: #fff;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 12px;
+            cursor: pointer;
+        }
+        .btn:disabled {
+            background: #cbd5e1;
+            color: #94a3b8;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="gameContainer">
+        <!-- 상단 스코어보드 -->
+        <div class="hud">
+            <div id="scoreDisplay">SCORE: 0</div>
+            <div id="bestDisplay">👑 BEST: 0</div>
+        </div>
+        
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- UI 메인 스크린 -->
+        <div class="screen active" id="menuScreen">
+            <h1 id="menuTitle">🚀 와이어 런: 무한 챌린지</h1>
+            <p id="menuText">
+                오직 컨트롤과 정교한 타이밍만으로 승부합니다.<br>추락하지 않고 가장 먼 거리까지 질주하세요!<br><br>
+                <b>[안내]</b> 하루에 딱 1번만 참여하고 리워드를 받을 수 있습니다.<br><br>
+                <b>[조작법]</b><br>
+                • 바닥에서 터치: <b>점프</b><br>
+                • 공중 포인터(📍) 근처에서 화면 꾹 누르기: <b>와이어 스윙</b>
+            </p>
+            <button class="btn" id="startBtn">기록 도전하기</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const bestDisplay = document.getElementById('bestDisplay');
+        const menuScreen = document.getElementById('menuScreen');
+        const menuTitle = document.getElementById('menuTitle');
+        const menuText = document.getElementById('menuText');
+        const startBtn = document.getElementById('startBtn');
+
+        canvas.width = 450;
+        canvas.height = 700;
+
+        let isPlaying = false;
+        let score = 0;
+        let highScore = parseInt(localStorage.getItem('wire_runner_best')) || 0;
+        let gameSpeed = 3.5;
+
+        bestDisplay.innerText = `👑 BEST: ${highScore}`;
+
+        // 금일 날짜 문자열 가져오기 (YYYY-MM-DD 형식)
+        function getTodayString() {
+            const d = new Date();
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+
+        // 오늘 이미 참여했는지 확인하는 함수 (수정됨 🛠️)
+        function checkDailyLimit() {
+            const lastPlayedDate = localStorage.getItem('wire_runner_last_date');
+            
+            // 오늘 이미 한 번 끝까지 플레이한 기록이 있다면 막기
+            if (lastPlayedDate === getTodayString()) {
+                menuTitle.innerText = "🛑 참여 완료";
+                menuTitle.style.color = "#b0b8c1";
+                menuText.innerHTML = `오늘의 도전 기회를 이미 사용하셨습니다.<br>내일 자정(00:00)에 다시 새로운 리워드와 함께 열립니다.<br><br><b>내 최고 기록: ${highScore.toLocaleString()}점</b>`;
+                startBtn.innerText = "내일 다시 오기";
+                startBtn.disabled = true;
+                return false;
+            }
+            
+            // 아직 안 했다면 정상 진행 가능
+            startBtn.disabled = false;
+            return true;
+        }
+
+        // 첫 로딩 시 확인
+        checkDailyLimit();
+
+        let player = {
+            x: 80, y: 400, radius: 15,
+            vy: 0, gravity: 0.45, jumpPower: -9.5,
+            isGrounded: false,
+            isHooked: false, hookTarget: null, angle: 0, angleSpeed: 0.05, length: 0
+        };
+
+        let platforms = [];
+        let hooks = [];
+
+        function initGame() {
+            // 게임 시작 전 다시 한 번 날짜 체크
+            if(!checkDailyLimit()) return;
+
+            score = 0;
+            gameSpeed = 3.5;
+            player.y = 350;
+            player.vy = 0;
+            player.isGrounded = false;
+            player.isHooked = false;
+            
+            platforms = [
+                { x: 0, width: 300, y: 450 },
+                { x: 400, width: 250, y: 450 }
+            ];
+            
+            hooks = [ { x: 350, y: 220 } ];
+            
+            scoreDisplay.innerText = `SCORE: 0`;
+            isPlaying = true;
+            menuScreen.classList.remove('active');
+        }
+
+        function playSfx(freq, type='sine') {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.08);
+        }
+
+        function handleInputStart() {
+            if (!isPlaying) return;
+
+            if (player.isGrounded) {
+                player.vy = player.jumpPower;
+                player.isGrounded = false;
+                playSfx(450);
+            } 
+            else if (!player.isGrounded && !player.isHooked) {
+                hooks.forEach(h => {
+                    let dist = Math.hypot(player.x - h.x, player.y - h.y);
+                    if (dist < 140 && h.x > player.x) {
+                        player.isHooked = true;
+                        player.hookTarget = h;
+                        player.length = dist;
+                        player.angle = Math.atan2(player.y - h.y, player.x - h.x);
+                        playSfx(700, 'square');
+                    }
+                });
+            }
+        }
+
+        function handleInputEnd() {
+            if (player.isHooked) {
+                player.isHooked = false;
+                player.vy = Math.cos(player.angle) * 7 - 3; 
+                playSfx(550);
+                score += 150; 
+                scoreDisplay.innerText = `SCORE: ${score}`;
+            }
+        }
+
+        window.addEventListener('touchstart', (e) => { e.preventDefault(); handleInputStart(); }, {passive:false});
+        window.addEventListener('touchend', handleInputEnd);
+        window.addEventListener('mousedown', handleInputStart);
+        window.addEventListener('mouseup', handleInputEnd);
+
+        function update() {
+            if (!isPlaying) return;
+
+            gameSpeed += 0.0006; 
+
+            if (player.isHooked) {
+                player.angle += player.angleSpeed;
+                player.x = player.hookTarget.x + Math.cos(player.angle) * player.length;
+                player.y = player.hookTarget.y + Math.sin(player.angle) * player.length;
+                player.x -= gameSpeed;
+            } else {
+                player.vy += player.gravity;
+                player.y += player.vy;
+                player.x = 80;
+            }
+
+            platforms.forEach(p => p.x -= gameSpeed);
+            hooks.forEach(h => h.x -= gameSpeed);
+
+            if (platforms[platforms.length - 1].x < canvas.width - 150) {
+                let nextWidth = Math.random() * 150 + 150;
+                let nextGap = Math.random() * 90 + 90;
+                let lastPlatform = platforms[platforms.length - 1];
+                
+                platforms.push({
+                    x: lastPlatform.x + lastPlatform.width + nextGap,
+                    width: nextWidth,
+                    y: 450
+                });
+
+                if (Math.random() > 0.3) {
+                    hooks.push({
+                        x: lastPlatform.x + lastPlatform.width + (nextGap / 2) + 20,
+                        y: Math.random() * 60 + 190
+                    });
+                }
+            }
+
+            if (platforms[0].x + platforms[0].width < 0) platforms.shift();
+            if (hooks[0] && hooks[0].x < 0) hooks.shift();
+
+            player.isGrounded = false;
+            if (!player.isHooked) {
+                platforms.forEach(p => {
+                    if (player.x + player.radius > p.x && 
+                        player.x - player.radius < p.x + p.width &&
+                        player.y + player.radius >= p.y && 
+                        player.y + player.radius <= p.y + 12 && 
+                        player.vy >= 0) {
+                        
+                        player.y = p.y - player.radius;
+                        player.vy = 0;
+                        player.isGrounded = true;
+                    }
+                });
+            }
+
+            if (player.y > canvas.height) {
+                gameOver();
+            }
+
+            score += 1;
+            if (score % 10 === 0) {
+                scoreDisplay.innerText = `SCORE: ${score}`;
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "#3182f6";
+            platforms.forEach(p => {
+                ctx.fillRect(p.x, p.y, p.width, 20);
+                ctx.fillStyle = "rgba(255,255,255,0.25)";
+                for(let ix = p.x + 12; ix < p.x + p.width - 12; ix += 30) {
+                    ctx.fillRect(ix, p.y + 5, 12, 10);
+                }
+                ctx.fillStyle = "#3182f6";
+            });
+
+            hooks.forEach(h => {
+                ctx.beginPath();
+                ctx.arc(h.x, h.y, 10, 0, Math.PI * 2);
+                ctx.fillStyle = "#ffcc00";
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = "#fff";
+                ctx.stroke();
+                ctx.closePath();
+                ctx.fillStyle = "#191f28";
+                ctx.font = "10px sans-serif";
+                ctx.fillText("📍", h.x - 5, h.y + 4);
+            });
+
+            if (player.isHooked) {
+                ctx.beginPath();
+                ctx.moveTo(player.x, player.y);
+                ctx.lineTo(player.hookTarget.x, player.hookTarget.y);
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = "#6c5ce7";
+                ctx.stroke();
+                ctx.closePath();
+            }
+
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fillStyle = player.isHooked ? "#6c5ce7" : "#ff4757";
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "#fff";
+            ctx.stroke();
+            ctx.closePath();
+        }
+
+        function gameOver() {
+            isPlaying = false;
+            
+            // 게임이 완전히 끝난 시점에 오늘 날짜 저장 (내일 자정까지 재참여 차단)
+            localStorage.setItem('wire_runner_last_date', getTodayString());
+
+            let isNewRecord = false;
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('wire_runner_best', highScore);
+                bestDisplay.innerText = `👑 BEST: ${highScore}`;
+                isNewRecord = true;
+            }
+
+            // 1원 ~ 10원 랜덤 뽑기
+            const randomReward = Math.floor(Math.random() * 10) + 1;
+
+            if (isNewRecord) {
+                menuTitle.innerText = "🎉 NEW RECORD!";
+                menuTitle.style.color = "#2ed573";
+                menuText.innerHTML = `${score.toLocaleString()}점 기록 달성 완료! 최고 기록을 경신했습니다.<br><br>오늘의 질주 리워드는 <b>${randomReward}원</b>입니다.<br>내일 또 도전하고 기록을 경신해 보세요!`;
+            } else {
+                menuTitle.innerText = "💥 GAME OVER";
+                menuTitle.style.color = "#ff4757";
+                menuText.innerHTML = `${score.toLocaleString()}점 기록 달성 완료!<br><br>오늘의 질주 리워드는 <b>${randomReward}원</b>입니다.<br>내일 또 도전하고 기록을 경신해 보세요!`;
+            }
+            
+            startBtn.innerText = "내일 다시 오기";
+            startBtn.disabled = true; // 하루 한 판 제한을 위해 비활성화
+            menuScreen.classList.add('active');
+        }
+
+        startBtn.addEventListener('click', initGame);
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+        loop();
+    </script>
+</body>
+</html>
